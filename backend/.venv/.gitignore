@@ -1,0 +1,12 @@
+# dependencies
+/node_modules
+fastapi
+uvicorn[standard]
+python-multipart
+deep-translator
+PyMuPDF
+pdfplumber
+python-docx
+openpyxl
+pdf2docx
+python-pptx
