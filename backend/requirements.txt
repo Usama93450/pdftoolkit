@@ -2,13 +2,10 @@ fastapi
 uvicorn[standard]
 python-multipart
 deep-translator
-PyMuPDF
+pymupdf
 pdfplumber
 python-docx
 openpyxl
 pdf2docx
 python-pptx
-fastapi
-uvicorn
 httpx
-pymupdf
