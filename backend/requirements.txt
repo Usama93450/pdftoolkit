@@ -8,3 +8,7 @@ python-docx
 openpyxl
 pdf2docx
 python-pptx
+fastapi
+uvicorn
+httpx
+pymupdf
