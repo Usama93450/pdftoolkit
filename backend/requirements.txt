@@ -9,3 +9,4 @@ openpyxl
 pdf2docx
 python-pptx
 httpx
+reportlab
