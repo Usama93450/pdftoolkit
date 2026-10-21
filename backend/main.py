@@ -54,9 +54,7 @@ FRONTEND_ORIGINS = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://pdftoolkit-og5k-qu84tgfai-usamawebdevelopers-projects.vercel.app"
-    ],  # Notice no trailing slash here!
+    allow_origins=["*"],  # Allows requests from any frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
