@@ -44,18 +44,22 @@ app = FastAPI(
 )
 
 FRONTEND_ORIGINS = [
-    origin.strip()
+    origin.strip().rstrip("/")
     for origin in os.getenv(
         "FRONTEND_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000",
+        (
+            "http://localhost:3000,"
+            "http://127.0.0.1:3000,"
+            "https://pdftoolkit-opwa-p5v2apmor-usamawebdevelopers-projects.vercel.app"
+        ),
     ).split(",")
     if origin.strip()
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows requests from any frontend URL
-    allow_credentials=True,
+    allow_origins=FRONTEND_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
