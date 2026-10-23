@@ -50,7 +50,7 @@ FRONTEND_ORIGINS = [
         (
             "http://localhost:3000,"
             "http://127.0.0.1:3000,"
-            "https://pdftoolkit-opwa-p5v2apmor-usamawebdevelopers-projects.vercel.app"
+            "https://pdftoolkit-opwa-3w7ib6989-usamawebdevelopers-projects.vercel.app/"
         ),
     ).split(",")
     if origin.strip()
