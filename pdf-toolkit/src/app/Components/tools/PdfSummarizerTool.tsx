@@ -13,8 +13,8 @@ import {
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_CONVERSION_API_URL ||
-  "http://127.0.0.1:8000"
-).replace(/\/+$/, "");
+  "https://pdftoolkit-production-dada.up.railway.app"
+).replace(/\/$/, "");
 
 type SummaryResponse = {
   document_id: string;
