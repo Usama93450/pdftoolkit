@@ -19,8 +19,8 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_CONVERSION_API_URL ||
-  "http://127.0.0.1:8000"
-).replace(/\/+$/, "");
+  "https://pdftoolkit-production-dada.up.railway.app"
+).replace(/\/$/, "");
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_TARGET_LANGUAGES = 10;
