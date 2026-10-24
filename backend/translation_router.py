@@ -71,28 +71,63 @@ FALLBACK_LANGUAGES = [
 LANGUAGE_CODE_PATTERN = re.compile(r"^[a-zA-Z_-]{2,20}$")
 
 
+
 def get_font_path() -> str:
-    """Find a Unicode TrueType font for generated PDFs."""
+    """Find a Unicode TrueType font in the deployment or configured path."""
+    backend_dir = Path(__file__).resolve().parent
+
+    configured_paths = [
+        os.getenv("PDF_TRANSLATION_FONT", "").strip(),
+        os.getenv("PDF_UNICODE_FONT", "").strip(),
+    ]
+
+    # First, check explicitly configured font paths.
+    for configured_path in configured_paths:
+        if not configured_path:
+            continue
+
+        path = Path(configured_path).expanduser()
+
+        # Support relative paths such as fonts/DejaVuSans.ttf.
+        if not path.is_absolute():
+            possible_paths = [
+                backend_dir / path,
+                Path.cwd() / path,
+            ]
+        else:
+            possible_paths = [path]
+
+        for candidate in possible_paths:
+            if candidate.is_file() and candidate.suffix.lower() == ".ttf":
+                return str(candidate.resolve())
+
+    # Then, check common font locations, including the bundled project font.
     candidates = [
-        os.getenv("PDF_TRANSLATION_FONT", ""),
-        os.getenv("PDF_UNICODE_FONT", ""),
-        r"C:\Windows\Fonts\arial.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-        r"C:\Windows\Fonts\tahoma.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        backend_dir / "fonts" / "DejaVuSans.ttf",
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path(r"C:\Windows\Fonts\arial.ttf"),
+        Path(r"C:\Windows\Fonts\segoeui.ttf"),
+        Path(r"C:\Windows\Fonts\tahoma.ttf"),
     ]
 
     for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return candidate
+        if candidate.is_file() and candidate.suffix.lower() == ".ttf":
+            return str(candidate.resolve())
+
+    logger.error(
+        "No translation font found. Checked configured paths and "
+        "standard locations. Backend directory: %s",
+        backend_dir,
+    )
 
     raise HTTPException(
         status_code=500,
         detail=(
-            "No Unicode TrueType font was found. Set PDF_TRANSLATION_FONT "
-            "to the full path of a suitable .ttf font."
+            "No Unicode TrueType font was found. Add "
+            "backend/fonts/DejaVuSans.ttf to the deployment or set "
+            "PDF_TRANSLATION_FONT to the path of an existing .ttf font."
         ),
     )
 
