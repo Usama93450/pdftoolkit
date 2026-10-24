@@ -55,6 +55,7 @@ FRONTEND_ORIGINS = [
             "https://pdftoolkit-opwa-5aaw97bin-usamawebdevelopers-projects.vercel.app,"
             "https://pdftoolkit-opwa-3w7ib6989-usamawebdevelopers-projects.vercel.app,"
             "https://pdftoolkit-hxr3otl7y-usamawebdevelopers-projects.vercel.app,"
+            "https://pdftoolkit-og5k-git-main-usamawebdevelopers-projects.vercel.app"
             "https://pdftoolkit.vercel.app"
         ),
     ).split(",")
