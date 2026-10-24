@@ -34,9 +34,12 @@ CHUNK_SIZE = 4000
 TRANSLATE_URL = os.getenv(
     "LIBRETRANSLATE_URL",
     "http://127.0.0.1:5000",
-).rstrip("/")
+).strip().rstrip("/")
 
-TRANSLATE_API_KEY = os.getenv("LIBRETRANSLATE_API_KEY", "").strip()
+TRANSLATE_API_KEY = os.getenv(
+    "LIBRETRANSLATE_API_KEY",
+    "",
+).strip()
 
 FALLBACK_LANGUAGES = [
     {"code": "en", "name": "English"},
@@ -149,7 +152,7 @@ def parse_ocr_pages(raw: str) -> list[str] | None:
 
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         raise HTTPException(
             status_code=400,
             detail="OCR text must be a valid JSON array of page strings.",
@@ -175,8 +178,7 @@ def parse_ocr_pages(raw: str) -> list[str] | None:
 
     pages = [page.strip() for page in value]
 
-    total_chars = sum(len(page) for page in pages)
-    if total_chars > MAX_OCR_TEXT_CHARS:
+    if sum(len(page) for page in pages) > MAX_OCR_TEXT_CHARS:
         raise HTTPException(
             status_code=413,
             detail="The extracted OCR text is too large to translate.",
@@ -206,10 +208,7 @@ def split_text(text: str, limit: int = CHUNK_SIZE) -> list[str]:
             split_at = limit
 
         chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:]
-
-        if remaining.startswith(" "):
-            remaining = remaining[1:]
+        remaining = remaining[split_at:].lstrip()
 
     if remaining:
         chunks.append(remaining)
@@ -220,15 +219,10 @@ def split_text(text: str, limit: int = CHUNK_SIZE) -> list[str]:
 async def fetch_languages(
     client: httpx.AsyncClient,
 ) -> list[dict[str, str]]:
-    """Get supported languages from the configured translation engine."""
+    """Fetch the supported languages from LibreTranslate."""
     response = await client.get(f"{TRANSLATE_URL}/languages")
-
-    if TRANSLATE_API_KEY:
-        # Most LibreTranslate instances do not require a key for /languages.
-        # The key is sent to /translate when configured.
-        pass
-
     response.raise_for_status()
+
     result = response.json()
 
     if not isinstance(result, list):
@@ -245,9 +239,94 @@ async def fetch_languages(
     ]
 
     if not languages:
-        raise ValueError("Translation service returned no languages.")
+        raise ValueError(
+            "Translation service returned no languages."
+        )
 
     return languages
+
+
+def parse_target_languages(raw: str) -> list[str]:
+    """
+    Parse target_languages from a multipart form field.
+
+    The frontend normally sends a JSON-encoded array, such as:
+        ["ur", "fr"]
+
+    This also accepts a single code such as:
+        ur
+
+    Malformed JSON objects, numbers, empty arrays and invalid codes
+    are rejected with a clear HTTP 400 response.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'target_languages must be a JSON array, '
+                'such as ["ur","fr"].'
+            ),
+        )
+
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        # Backward compatibility for a single plain language code.
+        value = raw.strip()
+
+    if isinstance(value, str):
+        value = [value]
+
+    if not isinstance(value, list) or not value:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'target_languages must be a JSON array, '
+                'such as ["ur","fr"].'
+            ),
+        )
+
+    if len(value) > MAX_TARGET_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Select no more than {MAX_TARGET_LANGUAGES} languages."
+            ),
+        )
+
+    targets: list[str] = []
+
+    for item in value:
+        if not isinstance(item, str):
+            raise HTTPException(
+                status_code=400,
+                detail="Each target language must be a language code.",
+            )
+
+        code = item.strip()
+
+        if not LANGUAGE_CODE_PATTERN.fullmatch(code):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid target language code: {code}",
+            )
+
+        if code.lower() == "auto":
+            raise HTTPException(
+                status_code=400,
+                detail="Automatic detection cannot be a target language.",
+            )
+
+        if code not in targets:
+            targets.append(code)
+
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one target language.",
+        )
+
+    return targets
 
 
 async def translate_chunk(
@@ -256,7 +335,7 @@ async def translate_chunk(
     target: str,
     source: str,
 ) -> str:
-    """Translate one text chunk using a LibreTranslate-compatible API."""
+    """Translate one text chunk through LibreTranslate."""
     if not text.strip():
         return text
 
@@ -276,12 +355,16 @@ async def translate_chunk(
             json=payload,
         )
     except httpx.RequestError as exc:
-        logger.exception("Could not connect to translation service")
+        logger.exception(
+            "LibreTranslate request failed. URL=%s/translate error=%r",
+            TRANSLATE_URL,
+            exc,
+        )
         raise HTTPException(
             status_code=502,
             detail=(
-                "Cannot connect to the translation service. Start your "
-                "LibreTranslate-compatible service and check LIBRETRANSLATE_URL."
+                "Cannot connect to the translation service. "
+                "Check LIBRETRANSLATE_URL and the LibreTranslate Railway logs."
             ),
         ) from exc
 
@@ -292,22 +375,31 @@ async def translate_chunk(
         )
 
     if response.status_code in (401, 403):
-        raise HTTPException(
-            status_code=502,
-            detail="The translation service rejected its API credentials.",
-        )
-
-    if response.is_error:
         logger.error(
-            "Translation service error: HTTP %s: %s",
+            "LibreTranslate rejected credentials: HTTP %s: %s",
             response.status_code,
             response.text[:500],
         )
         raise HTTPException(
             status_code=502,
             detail=(
-                "The translation service rejected the request. Verify that "
-                "the selected languages are supported by your translation engine."
+                "The translation service rejected its API credentials. "
+                "Check LIBRETRANSLATE_API_KEY."
+            ),
+        )
+
+    if response.is_error:
+        logger.error(
+            "LibreTranslate error: HTTP %s: %s",
+            response.status_code,
+            response.text[:500],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "The translation service rejected the request. "
+                "Check its logs and verify that both selected languages "
+                "are supported."
             ),
         )
 
@@ -315,6 +407,9 @@ async def translate_chunk(
         result = response.json()
         translated = result["translatedText"]
     except (ValueError, KeyError, TypeError) as exc:
+        logger.exception(
+            "LibreTranslate returned an invalid translation response."
+        )
         raise HTTPException(
             status_code=502,
             detail="The translation service returned an invalid response.",
@@ -335,7 +430,7 @@ async def translate_page(
     target: str,
     source: str,
 ) -> str:
-    """Translate one page, splitting long pages into smaller chunks."""
+    """Translate a page in chunks to avoid excessively large requests."""
     if not text.strip():
         return ""
 
@@ -343,7 +438,12 @@ async def translate_page(
 
     for chunk in split_text(text):
         translated_chunks.append(
-            await translate_chunk(client, chunk, target, source)
+            await translate_chunk(
+                client=client,
+                text=chunk,
+                target=target,
+                source=source,
+            )
         )
 
     return "\n".join(translated_chunks)
@@ -356,7 +456,9 @@ def create_pdf(pages: list[str], target: str) -> bytes:
 
     try:
         if font_name not in pdfmetrics.getRegisteredFontNames():
-            pdfmetrics.registerFont(TTFont(font_name, font_path))
+            pdfmetrics.registerFont(
+                TTFont(font_name, font_path)
+            )
     except Exception as exc:
         logger.exception("Could not register translation font")
         raise HTTPException(
@@ -425,12 +527,8 @@ def create_pdf(pages: list[str], target: str) -> bytes:
         )
 
         for line in page_text.splitlines():
-            story.append(
-                Paragraph(
-                    escape(line) if line.strip() else "&#160;",
-                    body,
-                )
-            )
+            safe_line = escape(line) if line.strip() else "&#160;"
+            story.append(Paragraph(safe_line, body))
 
     try:
         document.build(story)
@@ -447,62 +545,6 @@ def create_pdf(pages: list[str], target: str) -> bytes:
     return output.getvalue()
 
 
-def parse_target_languages(raw: str) -> list[str]:
-    """Validate target language codes sent by the frontend."""
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail='target_languages must be a JSON array, such as ["ur","fr"].',
-        ) from exc
-
-    if isinstance(value, str):
-        value = [value]
-
-    if not isinstance(value, list) or not value:
-        raise HTTPException(
-            status_code=400,
-            detail="Select at least one target language.",
-        )
-
-    if len(value) > MAX_TARGET_LANGUAGES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Select no more than {MAX_TARGET_LANGUAGES} languages."
-            ),
-        )
-
-    targets: list[str] = []
-
-    for item in value:
-        if not isinstance(item, str):
-            raise HTTPException(
-                status_code=400,
-                detail="Each target language must be a language code.",
-            )
-
-        code = item.strip()
-
-        if not LANGUAGE_CODE_PATTERN.fullmatch(code):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid target language code: {code}",
-            )
-
-        if code.lower() == "auto":
-            raise HTTPException(
-                status_code=400,
-                detail="Automatic detection cannot be a target language.",
-            )
-
-        if code not in targets:
-            targets.append(code)
-
-    return targets
-
-
 @router.get("/translation-languages")
 async def translation_languages():
     """Return languages supported by the configured translation service."""
@@ -516,7 +558,11 @@ async def translation_languages():
         }
 
     except (httpx.HTTPError, ValueError, TypeError) as exc:
-        logger.warning("Language discovery failed: %s", exc)
+        logger.warning(
+            "Language discovery failed. URL=%s/languages error=%r",
+            TRANSLATE_URL,
+            exc,
+        )
 
         return {
             "languages": FALLBACK_LANGUAGES,
@@ -555,13 +601,18 @@ async def translate_pdf(
                 detail="Maximum PDF upload size is 50 MB.",
             )
 
-        # Validate the uploaded PDF itself, including password and page limits.
+        # Validate the uploaded PDF and get its actual page count.
         try:
-            with fitz.open(stream=content, filetype="pdf") as uploaded_pdf:
+            with fitz.open(
+                stream=content,
+                filetype="pdf",
+            ) as uploaded_pdf:
                 if uploaded_pdf.needs_pass:
                     raise HTTPException(
                         status_code=400,
-                        detail="This PDF is password-protected. Unlock it first.",
+                        detail=(
+                            "This PDF is password-protected. Unlock it first."
+                        ),
                     )
 
                 if uploaded_pdf.page_count == 0:
@@ -583,16 +634,18 @@ async def translate_pdf(
         except HTTPException:
             raise
         except Exception as exc:
+            logger.exception("Uploaded PDF validation failed")
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded file is not a valid readable PDF.",
             ) from exc
 
+        # Parse the JSON-encoded multipart form value.
         targets = parse_target_languages(target_languages)
         source = source_language.strip()
 
         if (
-            source != "auto"
+            source.lower() != "auto"
             and not LANGUAGE_CODE_PATTERN.fullmatch(source)
         ):
             raise HTTPException(
@@ -600,8 +653,7 @@ async def translate_pdf(
                 detail="Invalid source language code.",
             )
 
-        # If the frontend performed OCR, use its page-by-page text.
-        # Otherwise extract selectable text directly from the original PDF.
+        # Use OCR text if supplied; otherwise extract selectable PDF text.
         pages = parse_ocr_pages(ocr_pages)
 
         if pages is not None:
@@ -620,13 +672,13 @@ async def translate_pdf(
             r"[^A-Za-z0-9_-]+",
             "_",
             Path(filename).stem,
-        )[:80]
-        stem = stem.strip("_") or "translated_document"
+        )[:80].strip("_") or "translated_document"
 
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(90, connect=15)
         ) as client:
             languages = await fetch_languages(client)
+
             supported = {
                 language["code"]
                 for language in languages
@@ -648,7 +700,7 @@ async def translate_pdf(
                     ),
                 )
 
-            if source != "auto" and source not in supported:
+            if source.lower() != "auto" and source not in supported:
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -665,15 +717,21 @@ async def translate_pdf(
                 for page_text in pages:
                     translated_pages.append(
                         await translate_page(
-                            client,
-                            page_text,
-                            target,
-                            source,
+                            client=client,
+                            text=page_text,
+                            target=target,
+                            source=source,
                         )
                     )
 
                 outputs.append(
-                    (target, create_pdf(translated_pages, target))
+                    (
+                        target,
+                        create_pdf(
+                            translated_pages,
+                            target,
+                        ),
+                    )
                 )
 
         if len(outputs) == 1:
@@ -714,12 +772,20 @@ async def translate_pdf(
 
     except HTTPException:
         raise
+
     except httpx.HTTPError as exc:
-        logger.exception("Translation provider request failed")
+        logger.exception(
+            "Translation provider HTTP failure. URL=%s",
+            TRANSLATE_URL,
+        )
         raise HTTPException(
             status_code=502,
-            detail="Could not communicate with the translation service.",
+            detail=(
+                "Could not communicate with the translation service. "
+                "Check the LibreTranslate Railway deployment and backend logs."
+            ),
         ) from exc
+
     except Exception as exc:
         logger.exception("Unexpected PDF translation failure")
         raise HTTPException(
@@ -729,5 +795,6 @@ async def translate_pdf(
                 "Check the backend logs."
             ),
         ) from exc
+
     finally:
         await file.close()
