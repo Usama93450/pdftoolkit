@@ -44,6 +44,7 @@ app = FastAPI(
 )
 
 
+
 FRONTEND_ORIGINS = [
     origin.strip().rstrip("/")
     for origin in os.getenv(
@@ -51,6 +52,7 @@ FRONTEND_ORIGINS = [
         (
             "http://localhost:3000,"
             "http://127.0.0.1:3000,"
+            "https://pdftoolkit-opwa-5aaw97bin-usamawebdevelopers-projects.vercel.app,"
             "https://pdftoolkit-opwa-3w7ib6989-usamawebdevelopers-projects.vercel.app,"
             "https://pdftoolkit-hxr3otl7y-usamawebdevelopers-projects.vercel.app,"
             "https://pdftoolkit.vercel.app"
